@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WordLoop 安装包下载</title>
+<style>
+  :root {
+    --seed: #5a5ff0;
+    --ink: #1b1c3a;
+    --muted: #6b6c8a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", sans-serif;
+    background: linear-gradient(160deg, #f4f5ff 0%, #eef0ff 40%, #f8f9ff 100%);
+    color: var(--ink);
+    display: flex;
+    justify-content: center;
+    padding: 28px 18px 40px;
+  }
+  .wrap { width: 100%; max-width: 560px; }
+  .brand {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+  }
+  .logo {
+    width: 48px; height: 48px; border-radius: 14px;
+    background: linear-gradient(135deg, #5a5ff0, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 800; font-size: 20px;
+    box-shadow: 0 10px 24px rgba(90, 95, 240, .28);
+  }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -.4px; }
+  .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .card {
+    background: #fff; border-radius: 22px; padding: 22px;
+    box-shadow: 0 18px 50px rgba(27, 28, 58, .08);
+  }
+  .meta {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px;
+  }
+  .pill {
+    font-size: 11px; font-weight: 600; color: var(--seed);
+    background: rgba(90, 95, 240, .1); border-radius: 999px;
+    padding: 6px 10px;
+  }
+  .btn {
+    display: block; width: 100%; text-align: center; text-decoration: none;
+    background: linear-gradient(135deg, #5a5ff0, #8b5cf6);
+    color: #fff; font-size: 16px; font-weight: 700;
+    padding: 16px 18px; border-radius: 16px;
+    box-shadow: 0 14px 30px rgba(90, 95, 240, .3);
+  }
+  .btn small { display: block; font-size: 11px; font-weight: 500; opacity: .85; margin-top: 4px; }
+  h2 { font-size: 14px; margin: 24px 0 10px; }
+  ol, ul { margin: 0; padding-left: 20px; }
+  li { font-size: 13px; line-height: 1.8; color: #3c3d5c; }
+  code {
+    background: #f2f2fa; border-radius: 6px; padding: 2px 6px;
+    font-size: 12px; color: var(--ink);
+  }
+  .note {
+    margin-top: 18px; padding: 12px 14px; border-radius: 14px;
+    background: #fff8e8; color: #7a5a12; font-size: 12px; line-height: 1.7;
+  }
+  .muted { color: var(--muted); font-size: 11px; line-height: 1.7; margin-top: 16px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo">W</div>
+      <div>
+        <h1>WordLoop</h1>
+        <div class="sub">基于记忆算法的英语单词学习</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="meta">
+        <span class="pill">版本 1.1.0</span>
+        <span class="pill">52.7 MB</span>
+        <span class="pill">Android 7.0+</span>
+      </div>
+
+      <a class="btn" href="WordLoop-1.1.0.apk" download>
+        下载安装包
+        <small>点击后开始下载 APK</small>
+      </a>
+
+      <h2>安装步骤</h2>
+      <ol>
+        <li>下载完成后，在通知栏或“文件管理 → 下载”里打开 APK。</li>
+        <li>系统提示“未知来源应用”时，允许对应的浏览器/文件管理器安装。</li>
+        <li>看到“未经 Play Protect 验证”时，选择“仍要安装”。</li>
+        <li>如果之前装过旧版，直接覆盖安装；只有提示签名不一致时才需要先卸载。</li>
+      </ol>
+
+      <h2>首次使用</h2>
+      <ol>
+        <li>手机和电脑连同一个 Wi-Fi 或热点。</li>
+        <li>打开 App → 设置 → 内容服务 → 后端地址，填 <code>http://172.24.12.158:8000</code>，保存后点“测试连接”。</li>
+        <li>允许通知权限；需要发音的话，确保手机有英文 TTS 语音。</li>
+      </ol>
+
+      <div class="note">
+        如果浏览器提示“此类文件可能有害”，选择“仍要下载/保留”即可。
+        如果手机打不开这个下载页，说明手机访问不到电脑，请改用 USB 数据线把 APK 复制到手机，或让电脑开移动热点给手机连接。
+      </div>
+
+      <div class="muted">
+        电脑的局域网 IP 可能变化；如果测试连接失败，在电脑上用 ipconfig 查看当前 WLAN 的 IPv4，再更新后端地址。
+      </div>
+    </div>
+  </div>
+</body>
+</html>
