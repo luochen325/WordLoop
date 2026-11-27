@@ -75,7 +75,7 @@ class ApiClient {
     final data = await _decode(resp);
     final url = data['url'] as String?;
     if (url == null) return null;
-    return url.startsWith('http') ? url : '$baseUrl$url';
+    return _resolveImageUrl(url, bustCache: force);
   }
 
   /// 非词库词/短语：按文本生成并缓存配图
@@ -90,7 +90,16 @@ class ApiClient {
     final data = await _decode(resp);
     final url = data['url'] as String?;
     if (url == null) return null;
-    return url.startsWith('http') ? url : '$baseUrl$url';
+    return _resolveImageUrl(url, bustCache: force);
+  }
+
+  /// 拼接完整图片地址；重新生成时追加时间戳，绕过 Flutter 的图片缓存，
+  /// 否则「换一张」拿到的仍是同一 URL 的旧图。
+  String _resolveImageUrl(String url, {bool bustCache = false}) {
+    final full = url.startsWith('http') ? url : '$baseUrl$url';
+    if (!bustCache) return full;
+    final sep = full.contains('?') ? '&' : '?';
+    return '$full${sep}v=${DateTime.now().millisecondsSinceEpoch}';
   }
 
   Future<AiWordCard> lookupWord(String word) async {

@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../data/demo_graphs.dart';
 import '../services/app_state.dart';
 import '../theme.dart';
 import '../widgets/charts.dart';
@@ -7,6 +8,7 @@ import '../widgets/common.dart';
 import '../widgets/progress_ring.dart';
 import 'context_screen.dart';
 import 'due_words_screen.dart';
+import 'graph_screen.dart';
 import 'study_screen.dart';
 import 'word_detail_screen.dart';
 
@@ -34,10 +36,12 @@ class HomeScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
               ],
-              _MainAction(
+              _PrimaryActions(
                 due: due,
                 newRemaining: newRemaining,
-                onTap: () => _startStudy(context),
+                onReview: () => _openStudy(context, isNew: false),
+                onLearn: () => _openStudy(context, isNew: true),
+                onGraph: () => _openGraph(context),
               ),
               const SizedBox(height: 16),
               _HeroCard(
@@ -332,32 +336,40 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  /// 一个入口同时承接新词学习和到期复习：先学新词，学完再引导复习。
-  void _startStudy(BuildContext context) {
-    final newIds = appState.newWords.map((word) => word.id).toList();
-    if (newIds.isNotEmpty) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => StudyScreen(wordIds: newIds, isNew: true),
+  void _openGraph(BuildContext context) {
+    final recent = appState.recentWords;
+    final candidate = recent.firstWhere(
+      (word) => demoGraphFor(word.word) != null,
+      orElse: () => appState.words.firstWhere(
+        (word) => word.word == 'ability',
+        orElse: () => appState.words.first,
+      ),
+    );
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => GraphScreen(centerWord: candidate.word),
+      ),
+    );
+  }
+
+  void _openStudy(BuildContext context, {required bool isNew}) {
+    final ids = isNew
+        ? appState.newWords.take(20).map((word) => word.id).toList()
+        : appState.dueWords.map((word) => word.id).toList();
+
+    if (ids.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isNew ? '今天的新词已经学完啦' : '暂时没有到期单词，先去学几个新词吧'),
+          behavior: SnackBarBehavior.floating,
         ),
       );
       return;
     }
 
-    final dueIds = appState.dueWords.map((word) => word.id).toList();
-    if (dueIds.isNotEmpty) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => StudyScreen(wordIds: dueIds, isNew: false),
-        ),
-      );
-      return;
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('今天的新词和复习都完成啦，休息一下吧'),
-        behavior: SnackBarBehavior.floating,
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => StudyScreen(wordIds: ids, isNew: isNew),
       ),
     );
   }
@@ -472,91 +484,110 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _MainAction extends StatelessWidget {
-  const _MainAction({
+class _PrimaryActions extends StatelessWidget {
+  const _PrimaryActions({
     required this.due,
     required this.newRemaining,
-    required this.onTap,
+    required this.onReview,
+    required this.onLearn,
+    required this.onGraph,
   });
 
   final int due;
   final int newRemaining;
-  final VoidCallback onTap;
-
-  String get _subtitle {
-    if (newRemaining > 0 && due > 0) {
-      return '今日新词剩 $newRemaining 个 · 待复习 $due 个';
-    }
-    if (newRemaining > 0) return '今日新词剩 $newRemaining 个';
-    if (due > 0) return '今日新词已完成 · $due 个单词待复习';
-    return '今日任务已完成，点此巩固';
-  }
+  final VoidCallback onReview;
+  final VoidCallback onLearn;
+  final VoidCallback onGraph;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(22),
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF5A5FF0), Color(0xFF8B5CF6)],
+    return Row(
+      children: [
+        Expanded(
+          child: _ActionTile(
+            icon: Icons.replay_rounded,
+            color: AppColors.seed,
+            title: '今日复习',
+            subtitle: due > 0 ? '$due 个待复习' : '暂无待复习',
+            onTap: onReview,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF5A5FF0).withValues(alpha: 0.24),
-              blurRadius: 18,
-              offset: const Offset(0, 8),
-            ),
-          ],
         ),
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Icon(
-                Icons.play_arrow_rounded,
-                color: Colors.white,
-                size: 30,
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '学习 / 复习单词',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xCCFFFFFF),
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right_rounded, color: Colors.white),
-          ],
+        const SizedBox(width: 10),
+        Expanded(
+          child: _ActionTile(
+            icon: Icons.auto_awesome_rounded,
+            color: AppColors.mint,
+            title: '学习新词',
+            subtitle: newRemaining > 0 ? '还剩 $newRemaining 个' : '今日已完成',
+            onTap: onLearn,
+          ),
         ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _ActionTile(
+            icon: Icons.hub_rounded,
+            color: AppColors.lavender,
+            title: '单词网络',
+            subtitle: '探索关联词',
+            onTap: onGraph,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActionTile extends StatelessWidget {
+  const _ActionTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      onTap: onTap,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: AppColors.ink,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10, color: AppColors.muted),
+          ),
+        ],
       ),
     );
   }

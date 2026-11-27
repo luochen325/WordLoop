@@ -41,6 +41,8 @@ dependencies:
   timezone: ^0.11.2
   flutter_tts: ^4.2.5
   intl: ^0.20.3
+  # 把生成的场景图缓存到手机本地
+  path_provider: ^2.1.4
 
 dev_dependencies:
   flutter_test:

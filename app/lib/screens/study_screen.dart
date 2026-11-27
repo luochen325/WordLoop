@@ -6,11 +6,11 @@ import 'package:material_ui/material_ui.dart';
 import '../models/ai_word_card.dart';
 import '../models/word.dart';
 import '../services/app_state.dart';
+import '../services/local_images.dart';
 import '../services/scheduler.dart';
 import '../theme.dart';
 import '../widgets/charts.dart';
 import '../widgets/common.dart';
-import 'graph_screen.dart';
 import 'word_detail_screen.dart';
 
 enum _PrefetchStatus { idle, loading, ready, error }
@@ -31,6 +31,7 @@ class StudyScreen extends StatefulWidget {
 
 class _StudyScreenState extends State<StudyScreen> {
   int _index = 0;
+  bool _revealed = false;
   bool _busy = false;
   int _correct = 0;
 
@@ -42,6 +43,11 @@ class _StudyScreenState extends State<StudyScreen> {
   bool _imageLoading = false;
   String? _imageError;
 
+  final TextEditingController _quizController = TextEditingController();
+  bool _cardLookupDone = false;
+  bool _quizChecked = false;
+  bool _quizCorrect = false;
+
   Timer? _progressTimer;
   int _generationSeconds = 0;
   _PrefetchStatus _nextStatus = _PrefetchStatus.idle;
@@ -51,6 +57,7 @@ class _StudyScreenState extends State<StudyScreen> {
   @override
   void dispose() {
     _progressTimer?.cancel();
+    _quizController.dispose();
     super.dispose();
   }
 
@@ -68,10 +75,8 @@ class _StudyScreenState extends State<StudyScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _prepareCurrent();
-      _prefetchNext();
-    });
+    _loadCachedOnly();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _prefetchNext());
   }
 
   /// 生成过程中显示已等待时间，避免用户以为卡死了。
@@ -151,26 +156,36 @@ class _StudyScreenState extends State<StudyScreen> {
     );
   }
 
-  /// 进入单词或切换到下一个单词时，自动加载并生成全部信息。
-  Future<void> _prepareCurrent() async {
+  /// 只读缓存，不在用户还没点击“显示释义”时消耗图片额度
+  Future<void> _loadCachedOnly() async {
     final word = _current;
     if (word == null) return;
     final wordId = word.id;
+    setState(() => _cardLookupDone = false);
     final cached = word.isCustom
         ? appState.cachedLookup(word.word)
         : appState.cachedCard(word.id);
-    final cachedImage = appState.cachedImageForWord(word);
-    if (mounted && _current?.id == wordId) {
-      setState(() {
-        if (cached != null) _card = cached;
-        if (cachedImage != null) _imageUrl = cachedImage;
-      });
+    if (cached != null) {
+      if (mounted && _current?.id == wordId) {
+        setState(() {
+          _card = cached;
+          _cardLookupDone = true;
+        });
+      }
+      return;
     }
-    final cardFuture = cached == null ? _loadCard() : Future<void>.value();
-    final imageFuture = appState.autoImageOnStudy && _imageUrl == null
-        ? _loadImage()
-        : Future<void>.value();
-    await Future.wait([cardFuture, imageFuture]);
+    try {
+      final card = await appState.fetchCachedCardForWord(word);
+      if (mounted && _current?.id == wordId && card != null) {
+        setState(() => _card = card);
+      }
+    } catch (_) {
+      // 离线时使用本地词表释义
+    } finally {
+      if (mounted && _current?.id == wordId) {
+        setState(() => _cardLookupDone = true);
+      }
+    }
   }
 
   /// 生成当前单词卡（失败后可以重试）。
@@ -196,6 +211,33 @@ class _StudyScreenState extends State<StudyScreen> {
       if (mounted && _current?.id == wordId) {
         setState(() => _cardLoading = false);
       }
+    }
+  }
+
+  /// 复习时先做一次拼写回忆，再揭晓完整单词卡。
+  void _checkQuiz() {
+    final word = _current;
+    final input = _quizController.text.trim();
+    if (word == null || input.isEmpty || _quizChecked) return;
+    setState(() {
+      _quizChecked = true;
+      _quizCorrect = input.toLowerCase() == word.word.toLowerCase();
+    });
+    appState.speak(word.word);
+  }
+
+  Future<void> _reveal() async {
+    final word = _current;
+    if (word == null || _busy) return;
+    setState(() => _revealed = true);
+    appState.speak(word.word);
+
+    if (_card == null) {
+      await _loadCard();
+    }
+
+    if (appState.autoImageOnStudy && _imageUrl == null) {
+      _loadImage();
     }
   }
 
@@ -255,6 +297,7 @@ class _StudyScreenState extends State<StudyScreen> {
       );
       setState(() {
         _index++;
+        _revealed = false;
         _card = null;
         _cardLoading = false;
         _cardError = null;
@@ -262,11 +305,15 @@ class _StudyScreenState extends State<StudyScreen> {
         _imageLoading = false;
         _imageError = null;
         _busy = false;
+        _cardLookupDone = false;
+        _quizController.clear();
+        _quizChecked = false;
+        _quizCorrect = false;
         _nextStatus = _PrefetchStatus.idle;
         _prefetchWordId = null;
         _nextError = null;
       });
-      _prepareCurrent();
+      _loadCachedOnly();
       _prefetchNext();
     } catch (error) {
       if (!mounted) return;
@@ -298,6 +345,12 @@ class _StudyScreenState extends State<StudyScreen> {
     }
 
     final word = queue[_index];
+    final quizLoading = !widget.isNew && !_revealed && !_cardLookupDone;
+    final quizReady = !widget.isNew &&
+        !_revealed &&
+        _cardLookupDone &&
+        _card != null &&
+        _card!.meanings.any((item) => item.zh.trim().isNotEmpty);
 
     return Scaffold(
       appBar: AppBar(
@@ -371,53 +424,97 @@ class _StudyScreenState extends State<StudyScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
                 child: Column(
                   children: [
-                    _WordHeader(
-                      word: word,
-                      card: _card,
-                      onSpeak: () => appState.speak(word.word),
-                      onOpenGraph: () => _openGraph(context, word),
-                    ),
-                    const SizedBox(height: 14),
-                    _ImagePanel(
-                      word: word,
-                      imageUrl: _imageUrl,
-                      loading: _imageLoading,
-                      error: _imageError,
-                      autoEnabled: appState.autoImageOnStudy,
-                      elapsedSeconds: _generationSeconds,
-                      onGenerate: () =>
-                          _loadImage(force: _imageUrl != null),
-                    ),
-                    const SizedBox(height: 14),
-                    _StudyContent(
-                      word: word,
-                      card: _card,
-                      loading: _cardLoading,
-                      error: _cardError,
-                      elapsedSeconds: _generationSeconds,
-                      onRetry: _loadCard,
-                      onSpeak: appState.speak,
-                    ),
+                    if (quizLoading) ...[
+                      const SizedBox(height: 20),
+                      const _QuizLoadingCard(),
+                    ] else if (quizReady) ...[
+                      const SizedBox(height: 8),
+                      _QuizCard(
+                        word: word,
+                        card: _card!,
+                        controller: _quizController,
+                        checked: _quizChecked,
+                        correct: _quizCorrect,
+                        onCheck: _checkQuiz,
+                        onSpeak: () => appState.speak(word.word),
+                      ),
+                    ] else ...[
+                      _WordHeader(
+                        word: word,
+                        card: _card,
+                        onSpeak: () => appState.speak(word.word),
+                      ),
+                      if (!_revealed) ...[
+                        const SizedBox(height: 20),
+                        AppCard(
+                          color: const Color(0xFFF5F3FF),
+                          child: Column(
+                            children: [
+                              const Icon(
+                                Icons.auto_awesome_rounded,
+                                color: AppColors.lavender,
+                                size: 28,
+                              ),
+                              const SizedBox(height: 10),
+                              const Text(
+                                '点击下方按钮，生成释义、例句、语音和场景图',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.ink,
+                                  height: 1.5,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '生成后再判断自己的掌握程度，效果更好',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.muted.withValues(alpha: 0.9),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ] else ...[
+                        const SizedBox(height: 14),
+                        _ImagePanel(
+                          word: word,
+                          imageUrl: _imageUrl,
+                          loading: _imageLoading,
+                          error: _imageError,
+                          autoEnabled: appState.autoImageOnStudy,
+                          elapsedSeconds: _generationSeconds,
+                          onGenerate: () =>
+                              _loadImage(force: _imageUrl != null),
+                        ),
+                        const SizedBox(height: 14),
+                        _StudyContent(
+                          word: word,
+                          card: _card,
+                          loading: _cardLoading,
+                          error: _cardError,
+                          elapsedSeconds: _generationSeconds,
+                          onRetry: _loadCard,
+                          onSpeak: appState.speak,
+                        ),
+                      ],
+                    ],
                   ],
                 ),
               ),
             ),
             _BottomArea(
+              revealed: _revealed,
               busy: _busy,
+              quizMode: (quizLoading || quizReady) && !_quizChecked,
+              onReveal: _reveal,
               onGrade: _answer,
               onShowRubric: () => _showRubric(context),
               onShowAlgorithm: () => _showAlgorithm(context),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  void _openGraph(BuildContext context, Word word) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => GraphScreen(centerWord: word.word),
       ),
     );
   }
@@ -534,13 +631,11 @@ class _WordHeader extends StatelessWidget {
     required this.word,
     required this.card,
     required this.onSpeak,
-    required this.onOpenGraph,
   });
 
   final Word word;
   final AiWordCard? card;
   final VoidCallback onSpeak;
-  final VoidCallback onOpenGraph;
 
   @override
   Widget build(BuildContext context) {
@@ -564,40 +659,15 @@ class _WordHeader extends StatelessWidget {
               ),
             ],
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                child: Text(
-                  word.word,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 40,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.ink,
-                    letterSpacing: -0.8,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              TextButton.icon(
-                onPressed: onOpenGraph,
-                icon: const Icon(
-                  Icons.hub_rounded,
-                  size: 16,
-                  color: AppColors.lavender,
-                ),
-                label: const Text(
-                  '网络',
-                  style: TextStyle(fontSize: 11, color: AppColors.lavender),
-                ),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: const Size(0, 32),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              ),
-            ],
+          Text(
+            word.word,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 40,
+              fontWeight: FontWeight.w800,
+              color: AppColors.ink,
+              letterSpacing: -0.8,
+            ),
           ),
         ],
       ),
@@ -634,8 +704,8 @@ class _ImagePanel extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
             child: AspectRatio(
               aspectRatio: 1.15,
-              child: Image.network(
-                imageUrl!,
+              child: CachedImage(
+                source: imageUrl!,
                 fit: BoxFit.cover,
                 loadingBuilder: (context, child, progress) {
                   if (progress == null) return child;
@@ -1020,15 +1090,221 @@ class _NextPrefetchBar extends StatelessWidget {
   }
 }
 
+class _QuizLoadingCard extends StatelessWidget {
+  const _QuizLoadingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const AppCard(
+      color: Color(0xFFF5F3FF),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '正在准备回忆题…',
+              style: TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 复习前的主动回忆：只给中文释义，让用户拼出英文单词。
+class _QuizCard extends StatelessWidget {
+  const _QuizCard({
+    required this.word,
+    required this.card,
+    required this.controller,
+    required this.checked,
+    required this.correct,
+    required this.onCheck,
+    required this.onSpeak,
+  });
+
+  final Word word;
+  final AiWordCard card;
+  final TextEditingController controller;
+  final bool checked;
+  final bool correct;
+  final VoidCallback onCheck;
+  final VoidCallback onSpeak;
+
+  @override
+  Widget build(BuildContext context) {
+    final meanings = card.meanings
+        .where((item) => item.zh.trim().isNotEmpty)
+        .take(2)
+        .toList();
+    final resultColor = correct ? AppColors.mint : AppColors.rose;
+
+    return AppCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.psychology_alt_rounded,
+                size: 20,
+                color: AppColors.seed,
+              ),
+              SizedBox(width: 8),
+              Text(
+                '先回忆一下',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.ink,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '根据中文释义，拼出对应的英文单词',
+            style: TextStyle(fontSize: 11, color: AppColors.muted),
+          ),
+          const SizedBox(height: 16),
+          for (final meaning in meanings)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (meaning.pos.isNotEmpty) ...[
+                    Text(
+                      meaning.pos,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.seed,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  Expanded(
+                    child: Text(
+                      meaning.zh,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.ink,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: controller,
+            enabled: !checked,
+            autocorrect: false,
+            enableSuggestions: false,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => onCheck(),
+            decoration: InputDecoration(
+              hintText: '输入英文单词',
+              hintStyle: const TextStyle(color: AppColors.muted),
+              filled: true,
+              fillColor: const Color(0xFFF7F7FC),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 14,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (!checked)
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: onCheck,
+                child: const Text('检查拼写'),
+              ),
+            )
+          else ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: resultColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    correct
+                        ? Icons.check_circle_rounded
+                        : Icons.cancel_rounded,
+                    size: 18,
+                    color: resultColor,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      correct
+                          ? '拼写正确，可以参考选择“想起”或“熟练”'
+                          : '正确拼写是 ${word.word}，可以参考选择“忘记”或“模糊”',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: resultColor,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onSpeak,
+                icon: const Icon(Icons.volume_up_rounded, size: 18),
+                label: const Text('听发音'),
+              ),
+            ),
+            const Text(
+              '点击下方按钮查看完整单词卡，再选择掌握度',
+              style: TextStyle(fontSize: 10, color: AppColors.muted),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _BottomArea extends StatelessWidget {
   const _BottomArea({
+    required this.revealed,
     required this.busy,
+    required this.quizMode,
+    required this.onReveal,
     required this.onGrade,
     required this.onShowRubric,
     required this.onShowAlgorithm,
   });
 
+  final bool revealed;
   final bool busy;
+  final bool quizMode;
+  final VoidCallback onReveal;
   final ValueChanged<ReviewGrade> onGrade;
   final VoidCallback onShowRubric;
   final VoidCallback onShowAlgorithm;
@@ -1041,93 +1317,102 @@ class _BottomArea extends StatelessWidget {
         color: Colors.white,
         border: Border(top: BorderSide(color: Color(0xFFEDEDF5))),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '你掌握到什么程度？',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.ink,
-                  ),
+      child: revealed
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '你掌握到什么程度？',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: onShowAlgorithm,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        minimumSize: const Size(0, 28),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text(
+                        '算法详情',
+                        style: TextStyle(fontSize: 10),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: onShowRubric,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        minimumSize: const Size(0, 28),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text(
+                        '评分标准',
+                        style: TextStyle(fontSize: 10),
+                      ),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _GradeButton(
+                        grade: ReviewGrade.again,
+                        color: AppColors.rose,
+                        busy: busy,
+                        onTap: onGrade,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _GradeButton(
+                        grade: ReviewGrade.hard,
+                        color: AppColors.amber,
+                        busy: busy,
+                        onTap: onGrade,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _GradeButton(
+                        grade: ReviewGrade.good,
+                        color: AppColors.seed,
+                        busy: busy,
+                        onTap: onGrade,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _GradeButton(
+                        grade: ReviewGrade.easy,
+                        color: AppColors.mint,
+                        busy: busy,
+                        onTap: onGrade,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            )
+          : SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: onReveal,
+                icon: const Icon(Icons.auto_awesome_rounded),
+                label: Text(quizMode ? '跳过自测，查看释义与场景图' : '显示释义与场景图'),
               ),
-              TextButton(
-                onPressed: onShowAlgorithm,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  minimumSize: const Size(0, 28),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: const Text(
-                  '算法详情',
-                  style: TextStyle(fontSize: 10),
-                ),
-              ),
-              TextButton(
-                onPressed: onShowRubric,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  minimumSize: const Size(0, 28),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: const Text(
-                  '评分标准',
-                  style: TextStyle(fontSize: 10),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: _GradeButton(
-                  grade: ReviewGrade.again,
-                  color: AppColors.rose,
-                  busy: busy,
-                  onTap: onGrade,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _GradeButton(
-                  grade: ReviewGrade.hard,
-                  color: AppColors.amber,
-                  busy: busy,
-                  onTap: onGrade,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _GradeButton(
-                  grade: ReviewGrade.good,
-                  color: AppColors.seed,
-                  busy: busy,
-                  onTap: onGrade,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _GradeButton(
-                  grade: ReviewGrade.easy,
-                  color: AppColors.mint,
-                  busy: busy,
-                  onTap: onGrade,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+            ),
     );
   }
 }
@@ -1416,10 +1701,6 @@ class _Summary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accuracy = total == 0 ? 0 : (correct / total * 100).round();
-    final due = appState.dueCount;
-    final planDone = !isNew || appState.learnedToday >= appState.dailyNewGoal;
-    final offerReview = planDone && due > 0;
-
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -1447,18 +1728,12 @@ class _Summary extends StatelessWidget {
               ),
               const SizedBox(height: 24),
               Text(
-                isNew
-                    ? (offerReview ? '今日新词计划完成' : '新词学习完成')
-                    : '复习完成',
-                textAlign: TextAlign.center,
+                isNew ? '新词学习完成' : '复习完成',
                 style: Theme.of(context).textTheme.headlineMedium,
               ),
               const SizedBox(height: 8),
               Text(
-                offerReview
-                    ? '完成了 $total 个单词，还有 $due 个单词到了复习时间。'
-                    : '完成了 $total 个单词，想起/熟练 $correct 个',
-                textAlign: TextAlign.center,
+                '完成了 $total 个单词，想起/熟练 $correct 个',
                 style: const TextStyle(color: AppColors.muted),
               ),
               const SizedBox(height: 28),
@@ -1481,7 +1756,7 @@ class _Summary extends StatelessWidget {
                     ),
                     Expanded(
                       child: StatTile(
-                        value: '$due',
+                        value: '${appState.dueCount}',
                         label: '待复习',
                         color: AppColors.amber,
                       ),
@@ -1490,46 +1765,16 @@ class _Summary extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 28),
-              if (offerReview) ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: () => _startReview(context),
-                    child: Text('复习今天到期的单词（$due）'),
-                  ),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('返回首页'),
                 ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('退出，返回首页'),
-                  ),
-                ),
-              ] else
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('返回首页'),
-                  ),
-                ),
+              ),
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  void _startReview(BuildContext context) {
-    final ids = appState.dueWords.map((word) => word.id).toList();
-    if (ids.isEmpty) {
-      Navigator.of(context).pop();
-      return;
-    }
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => StudyScreen(wordIds: ids, isNew: false),
       ),
     );
   }
