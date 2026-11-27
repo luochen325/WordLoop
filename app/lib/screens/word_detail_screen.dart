@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import '../models/ai_word_card.dart';
 import '../models/word.dart';
 import '../services/app_state.dart';
+import '../services/local_images.dart';
 import '../services/scheduler.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -392,8 +393,8 @@ class _WordDetailScreenState extends State<WordDetailScreen> {
             borderRadius: BorderRadius.circular(20),
             child: AspectRatio(
               aspectRatio: 1.35,
-              child: Image.network(
-                _imageUrl!,
+              child: CachedImage(
+                source: _imageUrl!,
                 fit: BoxFit.cover,
                 loadingBuilder: (context, child, progress) {
                   if (progress == null) return child;

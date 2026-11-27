@@ -10,6 +10,7 @@ import '../models/graph_data.dart';
 import '../models/word.dart';
 import '../models/word_progress.dart';
 import 'api_client.dart';
+import 'local_images.dart';
 import 'notification_service.dart';
 import 'scheduler.dart';
 import 'tts_service.dart';
@@ -540,13 +541,22 @@ class AppState extends ChangeNotifier {
   }
 
   Future<String?> imageUrl(int wordId, {bool force = false}) async {
+    final key = WordImageStore.keyForWord(wordId);
     if (!force) {
       final cached = _imageCache[wordId];
       if (cached != null) return cached;
+      final local = await WordImageStore.localPath(key);
+      if (local != null) {
+        _imageCache[wordId] = local;
+        return local;
+      }
     }
     final url = await api.generateImage(wordId, force: force);
-    if (url != null) _imageCache[wordId] = url;
-    return url;
+    if (url == null) return null;
+    // 生成成功后立刻落盘：下次同一单词直接读本地文件，不再请求后端。
+    final source = await WordImageStore.saveFromUrl(key, url) ?? url;
+    _imageCache[wordId] = source;
+    return source;
   }
 
   /// 确保配图存在：有缓存直接返回，没有就调用 AI 生成；并发去重。
@@ -663,19 +673,35 @@ class AppState extends ChangeNotifier {
       final inFlight = _textImageFutures[key];
       if (inFlight != null) return inFlight;
     }
-    final future = api
-        .generateImageByText(word.word, force: force)
-        .then((url) {
-          if (url != null) _textImageCache[key] = url;
-          notifyListeners();
-          return url;
-        });
+    final future = _loadTextImage(word.word, key, force: force);
     _textImageFutures[key] = future;
     try {
       return await future;
     } finally {
       _textImageFutures.remove(key);
     }
+  }
+
+  Future<String?> _loadTextImage(
+    String text,
+    String key, {
+    bool force = false,
+  }) async {
+    final cacheKey = WordImageStore.keyForText(text);
+    if (!force) {
+      final local = await WordImageStore.localPath(cacheKey);
+      if (local != null) {
+        _textImageCache[key] = local;
+        notifyListeners();
+        return local;
+      }
+    }
+    final url = await api.generateImageByText(text, force: force);
+    if (url == null) return null;
+    final source = await WordImageStore.saveFromUrl(cacheKey, url) ?? url;
+    _textImageCache[key] = source;
+    notifyListeners();
+    return source;
   }
 
   Future<GraphData> loadGraph(String word, {bool force = false}) async {
